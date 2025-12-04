@@ -1,7 +1,7 @@
 import os
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from time import mktime
 import feedparser
 import gspread
@@ -10,14 +10,14 @@ import google.generativeai as genai
 import pandas as pd
 
 # ==========================================
-# [설정 1] 날짜 필터 (며칠 이내 영상만 가져올 것인가?)
+# [설정 1] 한국 시간대(KST) 설정 & 날짜 필터
 # ==========================================
-FILTER_DAYS = 7  # 최근 7일 이내 영상만 수집 (오래된 영상 방지)
+KST = timezone(timedelta(hours=9))
+FILTER_DAYS = 3  # 최근 3일 이내 영상만 수집 (오래된 영상 원천 차단)
 
 # ==========================================
-# [설정 2] 구독할 유튜브 채널 목록 (채널 ID 입력)
+# [설정 2] 구독할 유튜브 채널 목록 (최신 확정판)
 # ==========================================
-# ※ 주의: 이 리스트를 수정했다면 반드시 GitHub에 Commit/Push 해야 적용됩니다.
 TARGET_CHANNELS = {
     "김영익의 경제스쿨" : "UCQIyAcoLsO3L0RMFQk7YMYA",
     "경제 읽어주는 남자(김광석TV)" : "UC3pfEoxaRDT6hvZZjpHu7Tg",
@@ -32,7 +32,7 @@ TARGET_CHANNELS = {
 }
 
 # ==========================================
-# [프롬프트] Gemini에게 보낼 분석 지침
+# [설정 3] 프롬프트
 # ==========================================
 SYSTEM_PROMPT = """
 지금부터 내가 유튜브 링크를 주면, 해당 영상의 내용을 분석해서 아래의 JSON 포맷으로 출력해 줘. 
@@ -65,7 +65,6 @@ SYSTEM_PROMPT = """
 # [핵심 로직]
 # ==========================================
 
-# 1. 구글 시트 연결
 def connect_google_sheet():
     try:
         json_creds = json.loads(os.environ['GCP_CREDENTIALS_JSON'])
@@ -78,7 +77,6 @@ def connect_google_sheet():
         print(f"🚨 구글 시트 연결 실패: {e}")
         return None
 
-# 2. 이미 분석한 영상 확인
 def get_existing_video_ids(sheet):
     try:
         data = sheet.get_all_records()
@@ -89,12 +87,11 @@ def get_existing_video_ids(sheet):
     except:
         return []
 
-# 3. Gemini 분석 요청
 def analyze_video(video_url):
     try:
         api_key = os.environ['GOOGLE_API_KEY']
         genai.configure(api_key=api_key)
-        # 모델명은 상황에 따라 gemini-1.5-flash 또는 gemini-pro 사용
+        # 1.5 flash 모델 사용
         model = genai.GenerativeModel('gemini-2.5-flash') 
         
         full_prompt = f"{SYSTEM_PROMPT}\n\n[분석할 영상 링크]: {video_url}"
@@ -111,27 +108,26 @@ def analyze_video(video_url):
         print(f"❌ Gemini 분석 실패 ({video_url}): {e}")
         return None
 
-# 4. 날짜 필터링 함수 (핵심 추가!)
 def is_recent_video(entry):
     try:
-        # RSS 피드의 날짜 파싱 (struct_time)
         published_time = entry.published_parsed
-        # datetime 객체로 변환
-        video_date = datetime.fromtimestamp(mktime(published_time))
-        # 현재 시간과의 차이 계산
-        delta = datetime.now() - video_date
+        video_date_utc = datetime.fromtimestamp(mktime(published_time), tz=timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        delta = now_utc - video_date_utc
+        
+        # 한국 시간 문자열 변환
+        video_date_kst = video_date_utc.astimezone(KST).strftime("%Y-%m-%d")
         
         if delta.days <= FILTER_DAYS:
-            return True, video_date.strftime("%Y-%m-%d")
+            return True, video_date_kst
         else:
-            return False, video_date.strftime("%Y-%m-%d")
+            return False, video_date_kst
     except:
-        # 날짜 파싱 실패 시 일단 통과 (혹은 스킵)
-        return True, datetime.now().strftime("%Y-%m-%d")
+        return True, datetime.now(KST).strftime("%Y-%m-%d")
 
-# 5. 메인 실행 함수
 def run_bot():
-    print(f"🚀 봇 실행 시작: {datetime.now()}")
+    print(f"🚀 [NEW] 봇 실행 시작 (한국시간): {datetime.now(KST)}")
+    print(f"📅 날짜 필터 적용 중: 최근 {FILTER_DAYS}일 이내 영상만 수집합니다.")
     
     sheet = connect_google_sheet()
     if not sheet: return
@@ -152,31 +148,29 @@ def run_bot():
             video_url = entry.link
             video_title = entry.title
             
-            # [1] 이미 DB에 있으면 스킵
             if video_id in existing_ids:
                 continue 
 
-            # [2] 날짜 필터링 (오래된 영상 스킵)
+            # [날짜 필터링]
             is_recent, video_date = is_recent_video(entry)
             if not is_recent:
-                # print(f"   PASS: 너무 오래된 영상 ({video_date}) - {video_title}")
+                # 오래된 영상은 무시
                 continue
 
             print(f"   ✨ 신규 영상 발견! ({video_date}) 분석 시작... [{video_title}]")
             
-            # Gemini에게 분석 요청
             result = analyze_video(video_url)
             
             if result:
                 key_args = "\n- ".join(result.get("key_arguments", []))
                 if key_args: key_args = "- " + key_args
-                
                 evidence = "\n- ".join(result.get("evidence", []))
                 if evidence: evidence = "- " + evidence
 
+                # 한국 시간으로 수집일시 저장
                 row_data = [
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    result.get("published_at", video_date), # Gemini가 날짜 못 찾으면 RSS 날짜 사용
+                    datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"), # 여기가 핵심! (한국시간)
+                    result.get("published_at", video_date),
                     result.get("video_id", video_id),
                     result.get("title", video_title),
                     result.get("channel_name", channel_name),
@@ -195,7 +189,7 @@ def run_bot():
                 print(f"   ✅ 저장 완료!")
                 existing_ids.append(video_id)
                 new_videos_found += 1
-                time.sleep(5) # API 과부하 방지를 위해 대기 시간 늘림
+                time.sleep(5)
 
     print(f"🏁 작업 종료. 총 {new_videos_found}개의 새 영상을 분석했습니다.")
 
