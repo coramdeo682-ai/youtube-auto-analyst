@@ -1,0 +1,28 @@
+name: 단일 채널 테스트 봇
+
+on:
+  workflow_dispatch:      # 수동 실행 버튼
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 코드 가져오기
+      uses: actions/checkout@v3
+
+    - name: 파이썬 3.10 설정
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 라이브러리 설치
+      run: |
+        pip install feedparser gspread oauth2client google-generativeai pandas
+
+    - name: 봇 실행
+      env:
+        GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      run: |
+        python youtube_bot.py
