@@ -1,0 +1,30 @@
+name: 유튜브 자동 분석 봇 (Hourly)
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 매 시간 0분마다 실행 (1시간 간격)
+  workflow_dispatch:      # 수동으로도 실행 가능하게 함
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 저장소 코드 가져오기
+      uses: actions/checkout@v3
+
+    - name: 파이썬 설정
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 라이브러리 설치
+      run: |
+        pip install -r requirements.txt
+
+    - name: 봇 실행
+      env:
+        GCP_CREDENTIALS_JSON: ${{ secrets.GCP_CREDENTIALS_JSON }}
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      run: |
+        python youtube_bot.py
