@@ -40,7 +40,6 @@ def check_and_update_headers(sheet):
     
     missing_cols = [col for col in required_headers if col not in current_headers]
     if missing_cols:
-        st.toast(f"🛠️ DB 업데이트: {', '.join(missing_cols)} 컬럼 추가됨", icon="✅")
         # 컬럼 추가 공간 확보
         if len(current_headers) + len(missing_cols) > sheet.col_count:
             sheet.resize(cols=len(current_headers) + len(missing_cols) + 5)
@@ -149,35 +148,40 @@ def ask_gemini(query, context, mode="analysis"):
 # ==========================================
 st.title("📈 금융 인사이트 AI Pro")
 
+# [확인용] 새 버전이 적용되었는지 알려주는 알림창 (실행되면 뜹니다)
+st.success("✅ 시스템 업데이트 완료: 수동 입력 및 평가 기능이 활성화된 V3.1 버전입니다.")
+
 # 데이터 로드 (가장 먼저 실행)
 df = load_data()
 
 # ------------------------------------------------------------------
-# [1] 사이드바: 수동 DB 저장 (무조건 보이게 최상단 배치)
+# [1] 사이드바: 수동 DB 저장 (Expander 제거하여 항상 노출)
 # ------------------------------------------------------------------
 with st.sidebar:
+    # 제목이 바뀌었는지 확인해주세요. (이전버전: 수집된 영상 -> 현재: 데이터 제어 센터)
     st.title("🗂️ 데이터 제어 센터")
     
-    # expander를 사용하여 깔끔하게 정리하되, 기본적으로 열어둠(expanded=True)
-    with st.expander("📝 JSON 데이터 수동 입력", expanded=True):
-        st.info("ChatGPT가 만든 JSON을 여기에 붙여넣으세요.")
-        json_input = st.text_area("입력창", height=150, placeholder='[{"제목": "...", "게시일": "2024-01-01"}]', key="json_input_area")
-        
-        if st.button("💾 DB에 저장하기", key="save_btn", type="primary"):
-            if not json_input.strip():
-                st.warning("데이터가 비어있습니다.")
-            else:
-                try:
-                    parsed_json = json.loads(json_input)
-                    success, msg = append_data_to_sheet(parsed_json)
-                    if success:
-                        st.success(msg)
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error(msg)
-                except json.JSONDecodeError:
-                    st.error("형식이 잘못되었습니다. 올바른 JSON을 입력하세요.")
+    st.markdown("### 📝 데이터 수동 입력")
+    st.info("ChatGPT가 만든 JSON을 아래에 붙여넣으세요.")
+    
+    # [수정] expander 제거, 직접 노출
+    json_input = st.text_area("JSON 입력창", height=200, placeholder='[{"제목": "...", "게시일": "2024-01-01"}]', key="json_input_area_v3")
+    
+    if st.button("💾 DB에 저장하기 (클릭)", key="save_btn_v3", type="primary", use_container_width=True):
+        if not json_input.strip():
+            st.warning("데이터가 비어있습니다.")
+        else:
+            try:
+                parsed_json = json.loads(json_input)
+                success, msg = append_data_to_sheet(parsed_json)
+                if success:
+                    st.success(msg)
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(msg)
+            except json.JSONDecodeError:
+                st.error("형식이 잘못되었습니다. 올바른 JSON을 입력하세요.")
 
     st.divider()
     
@@ -191,7 +195,7 @@ with st.sidebar:
         display_df.insert(0, 'No', range(1, len(display_df) + 1))
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     
-    if st.button("🔄 새로고침", key="refresh_btn"):
+    if st.button("🔄 새로고침", key="refresh_btn_v3"):
         st.cache_data.clear()
         st.rerun()
 
@@ -209,34 +213,33 @@ for msg in st.session_state.messages:
 
 # ------------------------------------------------------------------
 # [3] 답변 평가 (AI 비평) 버튼
-# 채팅 기록 바로 아래, 입력창 바로 위에 배치하여 눈에 띄게 함
+# 채팅 기록 루프가 끝난 직후, 입력창 바로 위에 '컨테이너'로 고정 표시
 # ------------------------------------------------------------------
-# 조건: 메시지가 있고, 마지막 메시지가 AI(assistant)의 답변일 때만 버튼 표시
+# 조건: 대화 기록이 있고, 마지막 메시지가 AI(assistant)인 경우
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
-    last_msg_content = st.session_state.messages[-1]["content"]
-    
-    # 첫 인사말에는 버튼을 띄우지 않음
+    # 첫 인사말("안녕하세요!")에는 평가 버튼을 띄우지 않음
     if len(st.session_state.messages) > 1: 
-        st.write("") # 간격 띄우기
+        st.markdown("---") # 구분선 추가
         
-        # 눈에 띄는 영역(Container) 생성
+        # 눈에 띄는 빨간색 박스 안에 배치
         with st.container(border=True):
             col1, col2 = st.columns([0.7, 0.3])
             with col1:
-                st.markdown("##### 🧐 이 답변, 믿어도 될까요?")
-                st.caption("리스크 관리자 AI에게 '교차 검증'을 요청해보세요.")
+                st.write("### 🧐 답변 검증이 필요하신가요?")
+                st.caption("AI 리스크 관리자가 이 답변의 위험 요소를 분석해 드립니다.")
             with col2:
-                if st.button("🚩 비판적 평가 보기", key="critique_btn", type="secondary", use_container_width=True):
-                    # 비평 생성 로직
-                    # 마지막 질문 찾기 (assistant 바로 앞의 user 메시지)
+                # 버튼 클릭 시 동작
+                if st.button("🚩 리스크 비평 보기", key="critique_btn_v3", type="secondary", use_container_width=True):
+                    # 마지막 질문과 답변 가져오기
+                    last_msg_content = st.session_state.messages[-1]["content"]
                     last_user_query = st.session_state.messages[-2]["content"]
                     
                     with st.spinner("🔍 외부 지식과 대조하며 팩트 체크 중..."):
                         critique = ask_gemini(last_user_query, last_msg_content, mode="critique")
                         
-                        # 비평 내용을 채팅창에 추가하여 기록으로 남김
+                        # 비평 내용을 채팅창에 추가
                         st.session_state.messages.append({"role": "assistant", "content": f"📝 **[전문가 비평 리포트]**\n\n{critique}"})
-                        st.rerun() # 화면 갱신하여 비평 내용 즉시 표시
+                        st.rerun() # 화면 갱신하여 즉시 표시
 
 # ------------------------------------------------------------------
 # [4] 사용자 입력창 (항상 하단 고정)
@@ -248,6 +251,7 @@ if prompt := st.chat_input("질문 예: 삼성전자 전망은? (최근 데이�
 # ------------------------------------------------------------------
 # [5] 답변 생성 로직 (Rerun 후 실행됨)
 # ------------------------------------------------------------------
+# 마지막 메시지가 사용자일 때만 실행 (AI 답변 생성)
 if st.session_state.messages[-1]["role"] == "user":
     user_query = st.session_state.messages[-1]["content"]
     
@@ -273,4 +277,5 @@ if st.session_state.messages[-1]["role"] == "user":
             
             # 답변을 세션에 추가
             st.session_state.messages.append({"role": "assistant", "content": response})
-            st.rerun() # 답변 완료 후 버튼 표시를 위해 갱신
+            # 답변이 추가되었으므로 다시 Rerun하여 [3]번의 평가 버튼이 보이게 함
+            st.rerun()
