@@ -19,16 +19,7 @@ FILTER_DAYS = 3  # 최근 3일 이내 영상만 수집 (오래된 영상 원천 
 # [설정 2] 구독할 유튜브 채널 목록 (최신 확정판)
 # ==========================================
 TARGET_CHANNELS = {
-    "김영익의 경제스쿨" : "UCQIyAcoLsO3L0RMFQk7YMYA",
-    "경제 읽어주는 남자(김광석TV)" : "UC3pfEoxaRDT6hvZZjpHu7Tg",
-    "내일은 투자왕 - 김단테" : "UCKTMvIu9a4VGSrpWy-8bUrQ",
-    "박종훈의 지식한방" : "UCOB62fKRT7b73X7tRxMuN2g",
-    "월가아재의 과학적 투자" : "UCpqD9_OJNtF6suPpi6mOQCQ",
-    "전인구경제연구소" : "UC3uzeWjN8v_ItMWhxILvuvQ",
-    "존리의 부자학교" : "UCXWOlSe2GHTev8QZhY_gMPg", 
-    "트래블제이(Travel J)주식투자와 10년 세계탐방" : "UCM0iG9ePKMIuGxUFBObgK9A",  
-    "할 수 있다! 알고 투자" : "UCSWPuzlD337Y6VBkyFPwT8g",
-    "홍춘욱의 경제강의노트" : "UCmNbuxmvRVv9OcdAO0cpLnw"
+    "김영익의 경제스쿨" : "UCQIyAcoLsO3L0RMFQk7YMYA"
 }
 
 # ==========================================
