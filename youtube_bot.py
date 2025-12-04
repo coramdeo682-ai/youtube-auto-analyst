@@ -93,7 +93,7 @@ def analyze_video(video_url):
     try:
         api_key = os.environ['GOOGLE_API_KEY']
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         full_prompt = f"{SYSTEM_PROMPT}\n\n[분석할 영상 링크]: {video_url}"
         response = model.generate_content(full_prompt)
