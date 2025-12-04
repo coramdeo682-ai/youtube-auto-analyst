@@ -10,25 +10,34 @@ import google.generativeai as genai
 import pandas as pd
 
 # ==========================================
-# [확인용] 내가 실행시킨 코드가 맞는지 확인하는 문구
+# [설정 1] 시스템 설정 (한국 시간 & 필터)
 # ==========================================
-print("\n" + "="*50)
-print("🚀 [사용자님 확인용] 단일 채널 테스트 봇 가동!")
-print("🎯 타겟 채널: 오직 '김영익의 경제스쿨' 하나만 검사합니다.")
-print("="*50 + "\n")
-
-# ==========================================
-# [설정] 한국 시간 & 날짜 필터 & 채널
-# ==========================================
+print("🚀 [SYSTEM] 유튜브 금융 분석 봇 가동 (Ver Final)")
 KST = timezone(timedelta(hours=9))
-FILTER_DAYS = 3
+FILTER_DAYS = 7  # 최근 7일 이내 영상만 수집합니다. (필요하면 숫자 변경 가능)
 
-# ★ 여기 딱 하나만 남겼습니다 ★
+# ==========================================
+# [설정 2] 구독 채널 목록 (최종 확정)
+# ==========================================
 TARGET_CHANNELS = {
-    "김영익의 경제스쿨" : "UCQIyAcoLsO3L0RMFQk7YMYA"
+    "김영익의 경제스쿨" : "UCQIyAcoLsO3L0RMFQk7YMYA",
+    "경제 읽어주는 남자(김광석TV)" : "UC3pfEoxaRDT6hvZZjpHu7Tg",
+    "내일은 투자왕 - 김단테" : "UCKTMvIu9a4VGSrpWy-8bUrQ",
+    "박종훈의 지식한방" : "UCOB62fKRT7b73X7tRxMuN2g",
+    "월가아재의 과학적 투자" : "UCpqD9_OJNtF6suPpi6mOQCQ",
+    "존리의 부자학교" : "UCXWOlSe2GHTev8QZhY_gMPg", 
+    "트래블제이(Travel J)주식투자와 10년 세계탐방" : "UCM0iG9ePKMIuGxUFBObgK9A",  
+    "할 수 있다! 알고 투자" : "UCSWPuzlD337Y6VBkyFPwT8g",
+    "홍춘욱의 경제강의노트" : "UCmNbuxmvRVv9OcdAO0cpLnw"
 }
 
+# ==========================================
+# [설정 3] 분석 프롬프트
+# ==========================================
 SYSTEM_PROMPT = """
+지금부터 내가 유튜브 링크를 주면, 해당 영상의 내용을 분석해서 아래의 JSON 포맷으로 출력해 줘. 
+다른 말은 하지 말고 오직 JSON 코드만 출력해. (코드 블록 안에 넣어서)
+
 [분석 지침]
 1. 'key_arguments'와 'evidence'는 짝을 이루어 구체적으로 작성할 것.
 2. 수치(%, 금액, 날짜)가 있다면 반드시 포함할 것.
@@ -48,9 +57,13 @@ SYSTEM_PROMPT = """
   "validity_check": "논리적 타당성 및 비판적 검토",
   "sentiment": "긍정/부정/중립",
   "tags": "키워드1, 키워드2, 키워드3",
-  "full_summary": "전체 내용 상세 요약"
+  "full_summary": "전체 내용 상세 요약 (서론-본론-결론)"
 }
 """
+
+# ==========================================
+# [핵심 로직 함수]
+# ==========================================
 
 def connect_google_sheet():
     try:
@@ -79,13 +92,16 @@ def analyze_video(video_url):
         api_key = os.environ['GOOGLE_API_KEY']
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash') 
+        
         full_prompt = f"{SYSTEM_PROMPT}\n\n[분석할 영상 링크]: {video_url}"
         response = model.generate_content(full_prompt)
+        
         text = response.text
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
         elif "```" in text:
             text = text.split("```")[1].split("```")[0]
+            
         return json.loads(text)
     except Exception as e:
         print(f"❌ Gemini 분석 실패 ({video_url}): {e}")
@@ -107,32 +123,37 @@ def is_recent_video(entry):
         return True, datetime.now(KST).strftime("%Y-%m-%d")
 
 def run_bot():
+    print(f"⏰ 현재 시간(KST): {datetime.now(KST)}")
+    
     sheet = connect_google_sheet()
     if not sheet: return
 
     existing_ids = get_existing_video_ids(sheet)
-    print(f"📚 기존 데이터 {len(existing_ids)}개 확인됨")
+    print(f"📚 DB에 저장된 영상 수: {len(existing_ids)}개")
+
+    new_videos_found = 0
 
     for channel_name, channel_id in TARGET_CHANNELS.items():
         rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         feed = feedparser.parse(rss_url)
         
-        print(f"📡 스캔 중: {channel_name} (ID: {channel_id})")
-        print(f"   -> 유튜브에서 가져온 최신 영상 개수: {len(feed.entries)}개")
+        print(f"📡 스캔 중: {channel_name} (최신 {len(feed.entries)}개)")
         
         for entry in feed.entries:
             video_id = entry.yt_videoid
             video_url = entry.link
             video_title = entry.title
             
+            # 1. 중복 체크
             if video_id in existing_ids:
                 continue 
 
+            # 2. 날짜 체크
             is_recent, video_date = is_recent_video(entry)
             if not is_recent:
-                continue
+                continue # 오래된 영상은 패스
 
-            print(f"   ✨ [신규 발견] {video_title} ({video_date}) -> 분석 시작")
+            print(f"   ✨ [NEW] {video_title} ({video_date}) -> 분석 시작!")
             
             result = analyze_video(video_url)
             
@@ -160,9 +181,12 @@ def run_bot():
                 ]
                 
                 sheet.append_row(row_data)
-                print(f"   ✅ 구글 시트 저장 완료!")
+                print(f"   ✅ 저장 완료!")
                 existing_ids.append(video_id)
+                new_videos_found += 1
                 time.sleep(5)
+
+    print(f"🏁 작업 종료. 총 {new_videos_found}개의 새 영상을 분석했습니다.")
 
 if __name__ == "__main__":
     run_bot()
