@@ -1,7 +1,8 @@
 import os
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from time import mktime
 import feedparser
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,8 +10,14 @@ import google.generativeai as genai
 import pandas as pd
 
 # ==========================================
-# [설정] 구독할 유튜브 채널 목록 (채널 ID 입력)
+# [설정 1] 날짜 필터 (며칠 이내 영상만 가져올 것인가?)
 # ==========================================
+FILTER_DAYS = 7  # 최근 7일 이내 영상만 수집 (오래된 영상 방지)
+
+# ==========================================
+# [설정 2] 구독할 유튜브 채널 목록 (채널 ID 입력)
+# ==========================================
+# ※ 주의: 이 리스트를 수정했다면 반드시 GitHub에 Commit/Push 해야 적용됩니다.
 TARGET_CHANNELS = {
     "김영익의 경제스쿨" : "UCQIyAcoLsO3L0RMFQk7YMYA",
     "경제 읽어주는 남자(김광석TV)" : "UC3pfEoxaRDT6hvZZjpHu7Tg",
@@ -22,8 +29,6 @@ TARGET_CHANNELS = {
     "트래블제이(Travel J)주식투자와 10년 세계탐방" : "UCM0iG9ePKMIuGxUFBObgK9A",  
     "할 수 있다! 알고 투자" : "UCSWPuzlD337Y6VBkyFPwT8g",
     "홍춘욱의 경제강의노트" : "UCmNbuxmvRVv9OcdAO0cpLnw"
-
-    # 원하는 채널 계속 추가 가능
 }
 
 # ==========================================
@@ -60,24 +65,20 @@ SYSTEM_PROMPT = """
 # [핵심 로직]
 # ==========================================
 
-# 1. 구글 시트 연결 (GitHub Secrets 이용)
+# 1. 구글 시트 연결
 def connect_google_sheet():
     try:
-        # GitHub Secrets에서 JSON 문자열을 가져와 딕셔너리로 변환
         json_creds = json.loads(os.environ['GCP_CREDENTIALS_JSON'])
-        
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_dict(json_creds, scope)
         client = gspread.authorize(creds)
-        
-        # 시트 이름이 'Youtube_Data_Store'라고 가정
         sheet = client.open("Youtube_Data_Store").sheet1 
         return sheet
     except Exception as e:
         print(f"🚨 구글 시트 연결 실패: {e}")
         return None
 
-# 2. 이미 분석한 영상인지 확인 (중복 방지)
+# 2. 이미 분석한 영상 확인
 def get_existing_video_ids(sheet):
     try:
         data = sheet.get_all_records()
@@ -93,12 +94,12 @@ def analyze_video(video_url):
     try:
         api_key = os.environ['GOOGLE_API_KEY']
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        # 모델명은 상황에 따라 gemini-1.5-flash 또는 gemini-pro 사용
+        model = genai.GenerativeModel('gemini-1.5-flash') 
         
         full_prompt = f"{SYSTEM_PROMPT}\n\n[분석할 영상 링크]: {video_url}"
         response = model.generate_content(full_prompt)
         
-        # JSON 정제 (Markdown 기호 제거)
         text = response.text
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
@@ -110,7 +111,25 @@ def analyze_video(video_url):
         print(f"❌ Gemini 분석 실패 ({video_url}): {e}")
         return None
 
-# 4. 메인 실행 함수
+# 4. 날짜 필터링 함수 (핵심 추가!)
+def is_recent_video(entry):
+    try:
+        # RSS 피드의 날짜 파싱 (struct_time)
+        published_time = entry.published_parsed
+        # datetime 객체로 변환
+        video_date = datetime.fromtimestamp(mktime(published_time))
+        # 현재 시간과의 차이 계산
+        delta = datetime.now() - video_date
+        
+        if delta.days <= FILTER_DAYS:
+            return True, video_date.strftime("%Y-%m-%d")
+        else:
+            return False, video_date.strftime("%Y-%m-%d")
+    except:
+        # 날짜 파싱 실패 시 일단 통과 (혹은 스킵)
+        return True, datetime.now().strftime("%Y-%m-%d")
+
+# 5. 메인 실행 함수
 def run_bot():
     print(f"🚀 봇 실행 시작: {datetime.now()}")
     
@@ -126,52 +145,57 @@ def run_bot():
         rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
         feed = feedparser.parse(rss_url)
         
-        print(f"📡 채널 스캔 중: {channel_name} (최신 {len(feed.entries)}개 확인)")
+        print(f"📡 채널 스캔 중: {channel_name}")
         
         for entry in feed.entries:
             video_id = entry.yt_videoid
             video_url = entry.link
             video_title = entry.title
             
+            # [1] 이미 DB에 있으면 스킵
             if video_id in existing_ids:
-                continue # 이미 분석한 영상은 패스
-            
-            print(f"   ✨ 신규 영상 발견! 분석 시작... [{video_title}]")
+                continue 
+
+            # [2] 날짜 필터링 (오래된 영상 스킵)
+            is_recent, video_date = is_recent_video(entry)
+            if not is_recent:
+                # print(f"   PASS: 너무 오래된 영상 ({video_date}) - {video_title}")
+                continue
+
+            print(f"   ✨ 신규 영상 발견! ({video_date}) 분석 시작... [{video_title}]")
             
             # Gemini에게 분석 요청
             result = analyze_video(video_url)
             
             if result:
-                # 리스트 형태 데이터를 문자열로 변환 (줄바꿈 처리)
                 key_args = "\n- ".join(result.get("key_arguments", []))
                 if key_args: key_args = "- " + key_args
                 
                 evidence = "\n- ".join(result.get("evidence", []))
                 if evidence: evidence = "- " + evidence
 
-                # 구글 시트에 저장할 데이터 순서 (CSV와 동일하게 맞춤)
                 row_data = [
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # 수집일시
-                    result.get("published_at", ""),                 # 업로드일
-                    result.get("video_id", video_id),               # 영상ID
-                    result.get("title", ""),                        # 제목
-                    result.get("channel_name", channel_name),       # 채널명
-                    result.get("main_topic", ""),                   # 핵심주제
-                    key_args,                                       # 핵심주장
-                    evidence,                                       # 근거
-                    result.get("implications", ""),                 # 시사점
-                    result.get("validity_check", ""),               # 타당성
-                    result.get("sentiment", ""),                    # 감정
-                    result.get("full_summary", ""),                 # 요약
-                    result.get("tags", ""),                         # 태그
-                    result.get("url", video_url)                    # URL
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    result.get("published_at", video_date), # Gemini가 날짜 못 찾으면 RSS 날짜 사용
+                    result.get("video_id", video_id),
+                    result.get("title", video_title),
+                    result.get("channel_name", channel_name),
+                    result.get("main_topic", ""),
+                    key_args,
+                    evidence,
+                    result.get("implications", ""),
+                    result.get("validity_check", ""),
+                    result.get("sentiment", ""),
+                    result.get("full_summary", ""),
+                    result.get("tags", ""),
+                    result.get("url", video_url)
                 ]
                 
                 sheet.append_row(row_data)
                 print(f"   ✅ 저장 완료!")
-                existing_ids.append(video_id) # 중복 방지 리스트 업데이트
+                existing_ids.append(video_id)
                 new_videos_found += 1
-                time.sleep(3) # 과부하 방지 대기
+                time.sleep(5) # API 과부하 방지를 위해 대기 시간 늘림
 
     print(f"🏁 작업 종료. 총 {new_videos_found}개의 새 영상을 분석했습니다.")
 
